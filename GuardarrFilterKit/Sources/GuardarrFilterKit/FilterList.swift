@@ -65,6 +65,9 @@ public struct FilterList: Sendable, Equatable {
     public let revision: Int
     public let fileSizeBytes: Int64
     public let events: [FilterEvent]
+    /// Categories the file was actually scanned for. Unknown values from a newer
+    /// server are dropped: an unknown category can't vouch for anything this app filters.
+    public let coverage: Set<FilterCategory>
 }
 
 extension FilterList: Decodable {
@@ -75,6 +78,7 @@ extension FilterList: Decodable {
         case revision
         case file
         case events
+        case coverage
     }
 
     private struct File: Decodable {
@@ -95,6 +99,7 @@ extension FilterList: Decodable {
         itemID = try container.decode(String.self, forKey: .itemId)
         revision = try container.decode(Int.self, forKey: .revision)
         fileSizeBytes = try container.decode(File.self, forKey: .file).sizeBytes
+        coverage = try Set((container.decodeIfPresent([String].self, forKey: .coverage) ?? []).compactMap(FilterCategory.init(rawValue:)))
         events = try container.decode([Event].self, forKey: .events).map { event in
             guard event.endMs > event.startMs, event.startMs >= 0 else {
                 throw DecodingError.dataCorruptedError(

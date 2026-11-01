@@ -47,10 +47,16 @@ struct GuardarrSettingsView: View {
                 Text("A filter made for a file that was later replaced is never applied, even with this on.")
             }
 
-            Section("Filter") {
+            Section {
                 ForEach(FilterCategory.allCases.filter { $0 != .other }, id: \.self) { category in
                     Toggle(title(for: category), isOn: binding(for: category))
                 }
+            } header: {
+                Text("Filter")
+            } footer: {
+                Text(
+                    "Guardarr scans for language and nudity today. A title can't play with another category on until it has been scanned for it."
+                )
             }
         }
         .navigationTitle("Content filter")
