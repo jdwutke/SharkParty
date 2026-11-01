@@ -48,13 +48,15 @@ public struct FilterTimeline: Sendable, Equatable {
     public let blackoutRanges: [FilterRange]
     public let skipRanges: [FilterRange]
 
-    /// - Parameter enabledCategories: categories the viewer filters. `.other` is always
-    ///   filtered, because unknown categories from a newer server decode as `.other`.
-    public init(events: [FilterEvent], enabledCategories: Set<FilterCategory>) {
-        let active = events.filter { enabledCategories.contains($0.category) || $0.category == .other }
+    /// - Parameter preferences: what the viewer filters. `.other` is always filtered,
+    ///   because unknown categories from a newer server decode as `.other`.
+    public init(events: [FilterEvent], preferences: FilterPreferences) {
+        let active: [(action: FilterAction, range: FilterRange)] = events.compactMap { event in
+            preferences.resolve(event).map { ($0, FilterRange(start: event.startMs, end: event.endMs)) }
+        }
 
         func ranges(_ actions: Set<FilterAction>) -> [FilterRange] {
-            Self.merge(active.filter { actions.contains($0.action) }.map { FilterRange(start: $0.startMs, end: $0.endMs) })
+            Self.merge(active.filter { actions.contains($0.action) }.map(\.range))
         }
 
         muteRanges = ranges([.mute, .blackout, .skip])

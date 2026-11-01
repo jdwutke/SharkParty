@@ -14,8 +14,9 @@ import FoundationNetworking
 #endif
 
 private let allCategories = Set(FilterCategory.allCases)
+private let allPrefs = FilterPreferences(categories: allCategories)
 
-private func event(_ action: FilterAction, _ start: Int64, _ end: Int64, _ category: FilterCategory = .nudity) -> FilterEvent {
+private func event(_ action: FilterAction, _ start: Int64, _ end: Int64, _ category: FilterCategory = .violence) -> FilterEvent {
     FilterEvent(action: action, category: category, startMs: start, endMs: end)
 }
 
@@ -157,19 +158,19 @@ struct GateTests {
 
     @Test
     func `only a matching list lets filtered playback start`() {
-        #expect(FilterGate.decide(.filtered(list), enabledCategories: allCategories, allowUnfilteredTitles: false)
-            == .apply(FilterTimeline(events: list.events, enabledCategories: allCategories)))
+        #expect(FilterGate.decide(.filtered(list), preferences: allPrefs, allowUnfilteredTitles: false)
+            == .apply(FilterTimeline(events: list.events, preferences: allPrefs)))
         #expect(FilterGate
-            .decide(.notFiltered(nil), enabledCategories: allCategories, allowUnfilteredTitles: false) == .block(.notFiltered(nil)))
+            .decide(.notFiltered(nil), preferences: allPrefs, allowUnfilteredTitles: false) == .block(.notFiltered(nil)))
         #expect(FilterGate
-            .decide(.fileChanged(nil), enabledCategories: allCategories, allowUnfilteredTitles: true) == .block(.fileChanged(nil)))
-        #expect(FilterGate.decide(.unauthorized, enabledCategories: allCategories, allowUnfilteredTitles: true) == .block(.unauthorized))
-        #expect(FilterGate.decide(.failed("x"), enabledCategories: allCategories, allowUnfilteredTitles: true) == .block(.failed("x")))
+            .decide(.fileChanged(nil), preferences: allPrefs, allowUnfilteredTitles: true) == .block(.fileChanged(nil)))
+        #expect(FilterGate.decide(.unauthorized, preferences: allPrefs, allowUnfilteredTitles: true) == .block(.unauthorized))
+        #expect(FilterGate.decide(.failed("x"), preferences: allPrefs, allowUnfilteredTitles: true) == .block(.failed("x")))
     }
 
     @Test
     func `allowing unfiltered titles only covers titles without a list`() {
-        #expect(FilterGate.decide(.notFiltered(nil), enabledCategories: allCategories, allowUnfilteredTitles: true) == .allowUnfiltered)
+        #expect(FilterGate.decide(.notFiltered(nil), preferences: allPrefs, allowUnfilteredTitles: true) == .allowUnfiltered)
     }
 }
 
@@ -179,7 +180,7 @@ struct TimelineTests {
     func `skip implies blackout and mute; blackout implies mute`() {
         let timeline = FilterTimeline(
             events: [event(.skip, 100, 200), event(.blackout, 300, 400), event(.mute, 500, 600)],
-            enabledCategories: allCategories
+            preferences: allPrefs
         )
         #expect(timeline.state(from: 150, through: 150) == FilterState(muted: true, blackedOut: true, skipTo: 200, skipFrom: 100))
         #expect(timeline.state(from: 350, through: 350) == FilterState(muted: true, blackedOut: true, skipTo: nil, skipFrom: nil))
@@ -189,7 +190,7 @@ struct TimelineTests {
 
     @Test
     func `ranges are half-open`() {
-        let timeline = FilterTimeline(events: [event(.mute, 100, 200)], enabledCategories: allCategories)
+        let timeline = FilterTimeline(events: [event(.mute, 100, 200)], preferences: allPrefs)
         #expect(timeline.state(from: 99, through: 99) == .clear)
         #expect(timeline.state(from: 100, through: 100).muted)
         #expect(timeline.state(from: 199, through: 199).muted)
@@ -198,7 +199,7 @@ struct TimelineTests {
 
     @Test
     func `a short word between two samples is still caught`() {
-        let timeline = FilterTimeline(events: [event(.mute, 1020, 1040, .language)], enabledCategories: allCategories)
+        let timeline = FilterTimeline(events: [event(.mute, 1020, 1040, .language)], preferences: allPrefs)
         #expect(timeline.state(from: 1000, through: 1050).muted)
     }
 
@@ -206,7 +207,7 @@ struct TimelineTests {
     func `overlapping and touching skips chain to one seek`() {
         let timeline = FilterTimeline(
             events: [event(.skip, 100, 200), event(.skip, 200, 300), event(.skip, 250, 500)],
-            enabledCategories: allCategories
+            preferences: allPrefs
         )
         #expect(timeline.skipRanges == [FilterRange(start: 100, end: 500)])
         #expect(timeline.state(from: 120, through: 120).skipTo == 500)
@@ -216,7 +217,7 @@ struct TimelineTests {
     func `disabled categories are dropped but other is always kept`() {
         let timeline = FilterTimeline(
             events: [event(.mute, 0, 10, .language), event(.skip, 20, 30, .violence), event(.blackout, 40, 50, .other)],
-            enabledCategories: [.nudity]
+            preferences: FilterPreferences(categories: [.nudity])
         )
         #expect(timeline.state(from: 5, through: 5) == .clear)
         #expect(timeline.state(from: 25, through: 25) == .clear)
@@ -235,7 +236,7 @@ struct TimelineTests {
             let start = next(100_000)
             events.append(event(.mute, start, start + 1 + next(800)))
         }
-        let timeline = FilterTimeline(events: events, enabledCategories: allCategories)
+        let timeline = FilterTimeline(events: events, preferences: allPrefs)
         for _ in 0 ..< 2000 {
             let low = next(101_000)
             let high = low + next(300)
@@ -250,7 +251,7 @@ struct ControllerTests {
     @Test
     func `filtering starts lead milliseconds early`() {
         var controller = FilterController(
-            timeline: FilterTimeline(events: [event(.mute, 1000, 1400)], enabledCategories: allCategories),
+            timeline: FilterTimeline(events: [event(.mute, 1000, 1400)], preferences: allPrefs),
             leadMs: 150
         )
         #expect(!controller.update(confirmedMs: 800, estimatedMs: 840).muted)
@@ -260,7 +261,7 @@ struct ControllerTests {
     @Test
     func `filtering ends only after the player confirms it is past the range`() {
         var controller = FilterController(
-            timeline: FilterTimeline(events: [event(.mute, 1000, 1400)], enabledCategories: allCategories),
+            timeline: FilterTimeline(events: [event(.mute, 1000, 1400)], preferences: allPrefs),
             leadMs: 0
         )
         // Estimated past the end, but the player last reported a position inside.
@@ -271,7 +272,7 @@ struct ControllerTests {
     @Test
     func `a skip stays dark until the player has played past the target`() {
         var controller = FilterController(
-            timeline: FilterTimeline(events: [event(.skip, 1000, 5000)], enabledCategories: allCategories),
+            timeline: FilterTimeline(events: [event(.skip, 1000, 5000)], preferences: allPrefs),
             leadMs: 0
         )
         #expect(controller.update(confirmedMs: 1000, estimatedMs: 1000) == FilterCommand(muted: true, blackedOut: true, seekToMs: 5000))
@@ -284,7 +285,7 @@ struct ControllerTests {
     @Test
     func `late reports from before the seek neither unblank nor re-seek`() {
         var controller = FilterController(
-            timeline: FilterTimeline(events: [event(.skip, 1000, 5000)], enabledCategories: allCategories),
+            timeline: FilterTimeline(events: [event(.skip, 1000, 5000)], preferences: allPrefs),
             leadMs: 0
         )
         _ = controller.update(confirmedMs: 1000, estimatedMs: 1000)
@@ -298,7 +299,7 @@ struct ControllerTests {
     @Test
     func `a seek that lands short plays out the range dark without seeking again`() {
         var controller = FilterController(
-            timeline: FilterTimeline(events: [event(.skip, 1000, 5000)], enabledCategories: allCategories),
+            timeline: FilterTimeline(events: [event(.skip, 1000, 5000)], preferences: allPrefs),
             leadMs: 0
         )
         _ = controller.update(confirmedMs: 1000, estimatedMs: 1000)
@@ -315,7 +316,7 @@ struct ControllerTests {
     @Test
     func `the viewer seeking far back ends the in-flight wait`() {
         var controller = FilterController(
-            timeline: FilterTimeline(events: [event(.skip, 10000, 50000)], enabledCategories: allCategories),
+            timeline: FilterTimeline(events: [event(.skip, 10000, 50000)], preferences: allPrefs),
             leadMs: 0
         )
         _ = controller.update(confirmedMs: 10000, estimatedMs: 10000)
@@ -327,7 +328,7 @@ struct ControllerTests {
     @Test
     func `a viewer seek back into the range after landing skips again`() {
         var controller = FilterController(
-            timeline: FilterTimeline(events: [event(.skip, 1000, 5000)], enabledCategories: allCategories),
+            timeline: FilterTimeline(events: [event(.skip, 1000, 5000)], preferences: allPrefs),
             leadMs: 0
         )
         _ = controller.update(confirmedMs: 1000, estimatedMs: 1000)
@@ -338,7 +339,7 @@ struct ControllerTests {
 
     @Test
     func `audio offset widens mutes on the side sound is shifted`() {
-        let timeline = FilterTimeline(events: [event(.mute, 1000, 1400, .language)], enabledCategories: allCategories)
+        let timeline = FilterTimeline(events: [event(.mute, 1000, 1400, .language)], preferences: allPrefs)
         var delayed = FilterController(timeline: timeline, leadMs: 0)
         // Sound 300 ms late: what is heard at 1600 was content at 1300.
         #expect(delayed.update(confirmedMs: 1600, estimatedMs: 1600, audioOffsetMs: 300).muted)
@@ -351,7 +352,7 @@ struct ControllerTests {
 
     @Test
     func `the lead scales with playback rate`() {
-        let timeline = FilterTimeline(events: [event(.mute, 1000, 1400)], enabledCategories: allCategories)
+        let timeline = FilterTimeline(events: [event(.mute, 1000, 1400)], preferences: allPrefs)
         var normal = FilterController(timeline: timeline, leadMs: 150)
         #expect(!normal.update(confirmedMs: 800, estimatedMs: 800, rate: 1).muted)
         var fast = FilterController(timeline: timeline, leadMs: 150)
@@ -360,7 +361,7 @@ struct ControllerTests {
 
     @Test
     func `an unfiltered stretch issues nothing`() {
-        var controller = FilterController(timeline: FilterTimeline(events: [], enabledCategories: allCategories))
+        var controller = FilterController(timeline: FilterTimeline(events: [], preferences: allPrefs))
         #expect(controller.update(confirmedMs: 0, estimatedMs: 10000) == FilterCommand(muted: false, blackedOut: false, seekToMs: nil))
     }
 }
@@ -406,16 +407,18 @@ struct CoverageAndScanTests {
         }
 
         #expect(decoded.coverage.isEmpty)
-        #expect(FilterGate.decide(.filtered(decoded), enabledCategories: [.language], allowUnfilteredTitles: true)
+        #expect(FilterGate.decide(.filtered(decoded), preferences: FilterPreferences(categories: [.language]), allowUnfilteredTitles: true)
             == .block(.notFullyScanned([.language])))
     }
 
     @Test
     func `a category the viewer filters but the file wasn't scanned for blocks`() {
         let result = FilterFetchResult.filtered(list(coverage: [.language]))
-        #expect(FilterGate.decide(result, enabledCategories: [.language, .nudity], allowUnfilteredTitles: true)
+        #expect(FilterGate.decide(result, preferences: FilterPreferences(categories: [.language, .nudity]), allowUnfilteredTitles: true)
             == .block(.notFullyScanned([.nudity])))
-        if case .apply = FilterGate.decide(result, enabledCategories: [.language], allowUnfilteredTitles: false) {} else {
+        if case .apply = FilterGate
+            .decide(result, preferences: FilterPreferences(categories: [.language]), allowUnfilteredTitles: false) {} else
+        {
             Issue.record("a fully covered list must apply")
         }
     }
@@ -423,7 +426,11 @@ struct CoverageAndScanTests {
     @Test
     func `other never needs coverage`() {
         let result = FilterFetchResult.filtered(list(coverage: [.language]))
-        if case .apply = FilterGate.decide(result, enabledCategories: [.language, .other], allowUnfilteredTitles: false) {} else {
+        if case .apply = FilterGate.decide(
+            result,
+            preferences: FilterPreferences(categories: [.language, .other]),
+            allowUnfilteredTitles: false
+        ) {} else {
             Issue.record("other is always filtered but never scanned for, so it must not block")
         }
     }

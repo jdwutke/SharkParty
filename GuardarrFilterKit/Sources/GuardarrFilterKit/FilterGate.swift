@@ -61,17 +61,17 @@ public enum FilterGate: Sendable, Equatable {
 
     public static func decide(
         _ result: FilterFetchResult,
-        enabledCategories: Set<FilterCategory>,
+        preferences: FilterPreferences,
         allowUnfilteredTitles: Bool
     ) -> FilterGate {
         switch result {
         case let .filtered(list):
             // A category the viewer filters that the file was never scanned for
             // would play through unfiltered, so it blocks like a missing list.
-            let missing = enabledCategories.subtracting(list.coverage).subtracting([.other])
+            let missing = preferences.filteredCategories.subtracting(list.coverage)
             guard missing.isEmpty else { return .block(.notFullyScanned(missing)) }
 
-            return .apply(FilterTimeline(events: list.events, enabledCategories: enabledCategories))
+            return .apply(FilterTimeline(events: list.events, preferences: preferences))
 
         case let .notFiltered(scan):
             return allowUnfilteredTitles ? .allowUnfiltered : .block(.notFiltered(scan))

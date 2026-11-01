@@ -23,6 +23,17 @@ struct GuardarrSettingsView: View {
     private var allowUnfilteredTitles
     @Default(.Guardarr.enabledCategories)
     private var enabledCategories
+    @Default(.Guardarr.preferences)
+    private var preferences
+
+    /// Words from the filter presets that are common enough to be worth a switch.
+    private static let commonWords = ["damn", "goddamn", "hell", "crap", "ass", "bastard", "piss", "shit", "bitch"]
+
+    private enum WordChoice: String, CaseIterable {
+        case standard = "Use level"
+        case allow = "Allow"
+        case block = "Always mute"
+    }
 
     // swiftlint:disable hard_coded_display_string
     var body: some View {
@@ -31,6 +42,44 @@ struct GuardarrSettingsView: View {
                 Toggle("Filter playback", isOn: $isEnabled)
             } footer: {
                 Text("Mutes, blacks out or skips content using filter lists from your Guardarr server. Applies to this user only.")
+            }
+
+            Section {
+                Toggle("Language", isOn: binding(for: .language))
+                Toggle("Mild: damn, hell", isOn: severityBinding(.mild))
+                Toggle("Moderate: shit, bitch", isOn: severityBinding(.moderate))
+                Toggle("Strong: f-word, slurs", isOn: severityBinding(.strong))
+            } header: {
+                Text("Language")
+            } footer: {
+                Text("Chosen levels are muted.")
+            }
+
+            Section {
+                Toggle("Nudity", isOn: binding(for: .nudity))
+                Toggle("Include bare buttocks", isOn: $preferences.includePartialNudity)
+                Picker("When it appears", selection: $preferences.nudityAction) {
+                    Text("Skip").tag(NudityAction.skip)
+                    Text("Black out").tag(NudityAction.blackout)
+                }
+            } header: {
+                Text("Nudity")
+            } footer: {
+                Text("Bare breasts and genitals are always included. Bare buttocks includes thongs and G-strings.")
+            }
+
+            Section {
+                ForEach(Self.commonWords, id: \.self) { word in
+                    Picker(word, selection: wordBinding(word)) {
+                        ForEach(WordChoice.allCases, id: \.self) { choice in
+                            Text(choice.rawValue).tag(choice)
+                        }
+                    }
+                }
+            } header: {
+                Text("Words")
+            } footer: {
+                Text("Allow a word to hear it even when its level is muted, or always mute it. Needs language on.")
             }
 
             Section("Server") {
@@ -46,31 +95,8 @@ struct GuardarrSettingsView: View {
             } footer: {
                 Text("A filter made for a file that was later replaced is never applied, even with this on.")
             }
-
-            Section {
-                ForEach(FilterCategory.allCases.filter { $0 != .other }, id: \.self) { category in
-                    Toggle(title(for: category), isOn: binding(for: category))
-                }
-            } header: {
-                Text("Filter")
-            } footer: {
-                Text(
-                    "Guardarr scans for language and nudity today. A title can't play with another category on until it has been scanned for it."
-                )
-            }
         }
         .navigationTitle("Content filter")
-    }
-
-    private func title(for category: FilterCategory) -> String {
-        switch category {
-        case .language: "Language"
-        case .nudity: "Nudity"
-        case .sexual: "Sexual content"
-        case .violence: "Violence"
-        case .gore: "Gore"
-        case .other: "Other"
-        }
     }
 
     // swiftlint:enable hard_coded_display_string
@@ -86,6 +112,38 @@ struct GuardarrSettingsView: View {
                 categories.remove(category.rawValue)
             }
             enabledCategories = FilterCategory.allCases.map(\.rawValue).filter(categories.contains)
+        }
+    }
+
+    private func severityBinding(_ severity: FilterSeverity) -> Binding<Bool> {
+        Binding {
+            preferences.mutedSeverities.contains(severity)
+        } set: { isOn in
+            if isOn {
+                preferences.mutedSeverities.insert(severity)
+            } else {
+                preferences.mutedSeverities.remove(severity)
+            }
+        }
+    }
+
+    private func wordBinding(_ word: String) -> Binding<WordChoice> {
+        Binding {
+            if preferences.blockedWords.contains(word) {
+                .block
+            } else if preferences.allowedWords.contains(word) {
+                .allow
+            } else {
+                .standard
+            }
+        } set: { choice in
+            preferences.allowedWords.remove(word)
+            preferences.blockedWords.remove(word)
+            switch choice {
+            case .standard: break
+            case .allow: preferences.allowedWords.insert(word)
+            case .block: preferences.blockedWords.insert(word)
+            }
         }
     }
 }

@@ -39,6 +39,41 @@ public enum FilterCategory: String, Sendable, Equatable, CaseIterable {
     }
 }
 
+/// How strong a language or nudity event is, so the viewer can pick a level.
+///
+/// Language is `mild`, `moderate` or `strong`; nudity is `partial` (bare buttocks) or
+/// `full` (bare breasts or genitals).
+public enum FilterSeverity: String, Sendable, Equatable, Codable, CaseIterable {
+
+    case mild
+    case moderate
+    case strong
+    case partial
+    case full
+
+    /// A severity from the server. A value this client doesn't know, or one that doesn't
+    /// belong to the category, reads as missing, which is filtered at every level, so a
+    /// newer server's list is never under-filtered. Categories without severities have none.
+    init?(serverValue: String?, category: FilterCategory) {
+        let valid: [FilterSeverity]
+        switch category {
+        case .language:
+            valid = [.mild, .moderate, .strong]
+
+        case .nudity:
+            valid = [.partial, .full]
+
+        default:
+            return nil
+        }
+        guard let serverValue, let severity = FilterSeverity(rawValue: serverValue), valid.contains(severity) else {
+            return nil
+        }
+
+        self = severity
+    }
+}
+
 public struct FilterEvent: Sendable, Equatable {
 
     public let action: FilterAction
@@ -46,13 +81,23 @@ public struct FilterEvent: Sendable, Equatable {
     public let startMs: Int64
     public let endMs: Int64
     public let label: String?
+    /// `nil` when the server didn't say, which counts as matching every level.
+    public let severity: FilterSeverity?
 
-    public init(action: FilterAction, category: FilterCategory, startMs: Int64, endMs: Int64, label: String? = nil) {
+    public init(
+        action: FilterAction,
+        category: FilterCategory,
+        startMs: Int64,
+        endMs: Int64,
+        label: String? = nil,
+        severity: FilterSeverity? = nil
+    ) {
         self.action = action
         self.category = category
         self.startMs = startMs
         self.endMs = endMs
         self.label = label
+        self.severity = severity
     }
 }
 
@@ -91,6 +136,7 @@ extension FilterList: Decodable {
         let startMs: Int64
         let endMs: Int64
         let label: String?
+        let severity: String?
     }
 
     public init(from decoder: Decoder) throws {
@@ -109,12 +155,14 @@ extension FilterList: Decodable {
                 )
             }
 
+            let category = FilterCategory(serverValue: event.category)
             return FilterEvent(
                 action: FilterAction(serverValue: event.action),
-                category: FilterCategory(serverValue: event.category),
+                category: category,
                 startMs: event.startMs,
                 endMs: event.endMs,
-                label: event.label
+                label: event.label,
+                severity: FilterSeverity(serverValue: event.severity, category: category)
             )
         }
     }

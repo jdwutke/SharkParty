@@ -118,7 +118,7 @@ final class GuardarrFilterObserver: ObservableObject, MediaPlayerObserver {
         let serverText = Defaults[.Guardarr.serverURL].trimmingCharacters(in: .whitespacesAndNewlines)
         let apiKey = Defaults[.Guardarr.apiKey].trimmingCharacters(in: .whitespacesAndNewlines)
         let allowUnfiltered = Defaults[.Guardarr.allowUnfilteredTitles]
-        let categories = Set(Defaults[.Guardarr.enabledCategories].compactMap(FilterCategory.init(rawValue:)))
+        let preferences = FilterPreferences.current
 
         guard let server = URL(string: serverText), server.scheme != nil, !apiKey.isEmpty else {
             block(.notConfigured)
@@ -154,7 +154,7 @@ final class GuardarrFilterObserver: ObservableObject, MediaPlayerObserver {
                 }
                 guard !Task.isCancelled, self != nil else { return }
 
-                let gate = FilterGate.decide(result, enabledCategories: categories, allowUnfilteredTitles: allowUnfiltered)
+                let gate = FilterGate.decide(result, preferences: preferences, allowUnfilteredTitles: allowUnfiltered)
                 self?.apply(gate)
 
                 // Keep checking while a scan is under way, and through a passing

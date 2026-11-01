@@ -9,6 +9,7 @@
 import Defaults
 import FactoryKit
 import Foundation
+import GuardarrFilterKit
 import SwiftUI
 import UIKit
 
@@ -424,9 +425,17 @@ extension Defaults.Keys {
 
         /// Raw `FilterCategory` values the viewer filters. Defaults to what the scan
         /// engine checks today; turning on a category it doesn't scan blocks playback
-        /// until it does.
+        /// until it does. This was the only filter setting before `preferences`, so it
+        /// stays the home of the on/off switches.
         static var enabledCategories: Key<[String]> {
             UserKey("guardarrEnabledCategories", default: ["language", "nudity"])
+        }
+
+        /// Language levels, allowed and blocked words, and nudity options. Read it
+        /// through `FilterPreferences.current`, which adds `enabledCategories`. Until the
+        /// viewer saves any, the default carries over what they had under the old key.
+        static var preferences: Key<FilterPreferences> {
+            UserKey("guardarrFilterPreferences", default: FilterPreferences.legacyDefault)
         }
     }
 
