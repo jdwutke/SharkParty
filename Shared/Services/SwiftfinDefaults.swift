@@ -400,6 +400,34 @@ extension Defaults.Keys {
     }
 
     // Experimental settings
+    /// Guardarr content filtering. Per user, so a household can filter some profiles only.
+    enum Guardarr {
+
+        static var isEnabled: Key<Bool> {
+            UserKey("guardarrFilterEnabled", default: false)
+        }
+
+        /// Filter service base URL, for example `http://10.10.110.25:8787`.
+        static var serverURL: Key<String> {
+            UserKey("guardarrFilterServerURL", default: "")
+        }
+
+        /// The filter service's read key. It can only fetch filter lists.
+        static var apiKey: Key<String> {
+            UserKey("guardarrFilterAPIKey", default: "")
+        }
+
+        /// Play titles that have no filter list yet. A list made for a replaced file is never applied.
+        static var allowUnfilteredTitles: Key<Bool> {
+            UserKey("guardarrAllowUnfilteredTitles", default: false)
+        }
+
+        /// Raw `FilterCategory` values the viewer filters.
+        static var enabledCategories: Key<[String]> {
+            UserKey("guardarrEnabledCategories", default: ["language", "nudity", "sexual", "violence", "gore", "other"])
+        }
+    }
+
     enum Experimental {
 
         static var mpvPlayer: Key<Bool> {

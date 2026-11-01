@@ -56,6 +56,9 @@ struct VideoPlayer: View {
             videoSize: proxy.videoSize
         ) { videoLayout in
             proxy.videoPlayerBody(layout: videoLayout)
+                .overlay {
+                    GuardarrFilterOverlay(manager: manager)
+                }
                 .eraseToAnyView()
         } playbackControls: {
             PlaybackControls()
@@ -96,6 +99,8 @@ struct VideoPlayer: View {
             manager.stop()
         }
         .onReceive(manager.$playbackItem) { newItem in
+            newItem?.attachGuardarrFilterIfEnabled(manager: manager)
+
             // TODO: move to container view
             viewState.scrubbedSeconds.value = newItem?.baseItem.startSeconds ?? .zero
         }
