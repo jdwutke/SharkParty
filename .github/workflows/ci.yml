@@ -5,6 +5,8 @@ name: ci
 on:
   push:
     tags: ["v*"]
+    # Guardarr fork: build every filter-layer branch.
+    branches: ["guardarr/**"]
   workflow_dispatch:
 
 permissions:
@@ -30,7 +32,17 @@ jobs:
         run: |
           set -euo pipefail
           xcode="$(ls -d /Applications/Xcode_27*.app 2>/dev/null | sort -V | tail -1 || true)"
-          test -n "$xcode" || { echo "::error::no Xcode 27 on this runner image"; ls -d /Applications/Xcode*.app; exit 1; }
+          # Some runner images ship Xcode 27 only as the default Xcode.app.
+          if [ -z "$xcode" ] && DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcodebuild -version | grep -q '^Xcode 27'; then
+            xcode=/Applications/Xcode.app
+          fi
+          # GitHub's hosted images don't carry Xcode 27 yet. Fall back to the newest
+          # Xcode 26; the tvOS 26.1 deployment target builds with it.
+          if [ -z "$xcode" ]; then
+            xcode="$(ls -d /Applications/Xcode_26*.app 2>/dev/null | sort -V | tail -1 || true)"
+            echo "::warning::Xcode 27 not found; using $xcode"
+          fi
+          test -n "$xcode" || { echo "::error::no usable Xcode on this runner image"; ls -d /Applications/Xcode*.app; exit 1; }
           echo "DEVELOPER_DIR=$xcode/Contents/Developer" >> "$GITHUB_ENV"
           DEVELOPER_DIR="$xcode/Contents/Developer" xcodebuild -version
           DEVELOPER_DIR="$xcode/Contents/Developer" xcrun --sdk appletvsimulator --show-sdk-version
@@ -55,14 +67,19 @@ jobs:
       - name: Test SubtitleKit package
         run: swift test --package-path SubtitleKit
 
+      - name: Test GuardarrFilterKit package
+        run: swift test --package-path GuardarrFilterKit
+
       - name: Build unsigned SharkParty tvOS simulator app
         run: |
           set -euo pipefail
           xcodebuild -project Swiftfin.xcodeproj -scheme 'SharkParty tvOS' \
             -configuration Debug -destination 'generic/platform=tvOS Simulator' \
             -derivedDataPath "$RUNNER_TEMP/DerivedData" \
+            -skipMacroValidation -skipPackagePluginValidation \
             CODE_SIGNING_ALLOWED=NO ARCHS=arm64 ONLY_ACTIVE_ARCH=YES build \
             > "$RUNNER_TEMP/xcodebuild.log" 2>&1 || {
+              grep -E '(error|fatal error):' "$RUNNER_TEMP/xcodebuild.log" | sort -u | head -80 || true
               tail -100 "$RUNNER_TEMP/xcodebuild.log"
               exit 1
             }

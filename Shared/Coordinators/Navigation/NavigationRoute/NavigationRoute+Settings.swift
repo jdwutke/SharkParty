@@ -162,6 +162,14 @@ extension NavigationRoute {
         }
     }
 
+    static var guardarrSettings: NavigationRoute {
+        NavigationRoute(
+            id: "guardarrSettings"
+        ) {
+            GuardarrSettingsView()
+        }
+    }
+
     static var experimentalSettings: NavigationRoute {
         NavigationRoute(
             id: "experimentalSettings"

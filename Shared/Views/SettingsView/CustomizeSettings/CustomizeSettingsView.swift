@@ -56,6 +56,11 @@ struct CustomizeSettingsView: View {
                 router.route(to: .videoPlayerSettings)
             }
 
+            // swiftlint:disable:next hard_coded_display_string
+            ChevronButton("Content filter") {
+                router.route(to: .guardarrSettings)
+            }
+
             HomeSection()
         }
         .navigationTitle(L10n.advanced)
