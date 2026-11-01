@@ -456,6 +456,7 @@ struct CoverageAndScanTests {
         #expect(FilterGate.isWaitingForScan(.notFiltered(ScanStatus(state: .queued))))
         #expect(FilterGate.isWaitingForScan(.fileChanged(ScanStatus(state: .running))))
         #expect(!FilterGate.isWaitingForScan(.notFiltered(ScanStatus(state: .failed))))
+        #expect(FilterGate.isWaitingForScan(.notFiltered(ScanStatus(state: .done))), "a just-finished scan's list is fetched")
         #expect(!FilterGate.isWaitingForScan(.notFiltered(nil)))
     }
 

@@ -142,18 +142,32 @@ final class GuardarrFilterObserver: ObservableObject, MediaPlayerObserver {
         // the list is published.
         fetchTask = Task { [weak self] in
             var hasRequestedScan = false
+            var wasWaiting = false
             while !Task.isCancelled {
                 var result = await Self.fetchList(request, sizeBytes: size, itemID: itemID)
                 if !hasRequestedScan, FilterGate.shouldRequestScan(result), let scanRequest {
                     hasRequestedScan = true
-                    result = await result.withScan(Self.requestScan(scanRequest))
+                    // A failed request keeps whatever status the server last reported.
+                    if let scan = await Self.requestScan(scanRequest) {
+                        result = result.withScan(scan)
+                    }
                 }
-                guard !Task.isCancelled, let self else { return }
+                guard !Task.isCancelled else { return }
 
-                self.apply(FilterGate.decide(result, enabledCategories: categories, allowUnfilteredTitles: allowUnfiltered))
+                let gate = FilterGate.decide(result, enabledCategories: categories, allowUnfilteredTitles: allowUnfiltered)
+                self?.apply(gate)
 
-                guard FilterGate.isWaitingForScan(result) else { return }
+                // Keep checking while a scan is under way, and through a passing
+                // network failure while one was, so a blip doesn't strand the viewer.
+                let isWaiting = FilterGate.isWaitingForScan(result)
+                let isTransientFailure: Bool = if case .failed = result {
+                    wasWaiting
+                } else {
+                    false
+                }
+                guard isWaiting || isTransientFailure else { return }
 
+                wasWaiting = wasWaiting || isWaiting
                 try? await Task.sleep(for: Self.scanPollInterval)
             }
         }
@@ -210,6 +224,12 @@ final class GuardarrFilterObserver: ObservableObject, MediaPlayerObserver {
 
     private func block(_ reason: FilterBlockReason) {
         status = .blocked(reason.message)
+        // An unfiltered title stops the ticker. A block that arrives later (a list
+        // missing a category, a lost server) must hold playback paused and muted
+        // on every tick again.
+        if ticker == nil {
+            startTicker()
+        }
         manager?.logger.warning("Guardarr filter blocked playback", metadata: ["reason": .string(reason.message)])
         tick()
     }

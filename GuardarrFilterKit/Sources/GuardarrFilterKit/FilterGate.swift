@@ -98,11 +98,12 @@ public enum FilterGate: Sendable, Equatable {
         }
     }
 
-    /// Whether to keep checking back: a scan is queued or running.
+    /// Whether to keep checking back: a scan is queued or running, or just finished
+    /// (its list may have been published between the two requests).
     public static func isWaitingForScan(_ result: FilterFetchResult) -> Bool {
         switch result {
         case let .notFiltered(scan), let .fileChanged(scan):
-            scan?.isActive ?? false
+            (scan?.isActive ?? false) || scan?.state == .done
         default:
             false
         }
