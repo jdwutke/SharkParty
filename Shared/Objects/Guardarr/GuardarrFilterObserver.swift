@@ -152,7 +152,7 @@ final class GuardarrFilterObserver: ObservableObject, MediaPlayerObserver {
                         result = result.withScan(scan)
                     }
                 }
-                guard !Task.isCancelled else { return }
+                guard !Task.isCancelled, self != nil else { return }
 
                 let gate = FilterGate.decide(result, enabledCategories: categories, allowUnfilteredTitles: allowUnfiltered)
                 self?.apply(gate)
