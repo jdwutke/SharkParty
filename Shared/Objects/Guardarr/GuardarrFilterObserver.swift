@@ -50,9 +50,13 @@ final class GuardarrFilterObserver: ObservableObject, MediaPlayerObserver {
     private var lastConfirmedMs: Int64?
     private var ticker: Timer?
     private var fetchTask: Task<Void, Never>?
+    /// Set when the filter itself paused playback, so it is resumed once a list
+    /// arrives. A viewer's own pause is left alone.
+    private var pausedForFilter = false
     private var cancellables: Set<AnyCancellable> = []
 
     private static let tickInterval: TimeInterval = 0.05
+    private static let scanPollInterval: Duration = .seconds(15)
     private static let playerCannotFilter = "This player can't apply filters. Choose VLC or Native as the player in Settings."
 
     init(item: MediaPlayerItem) {
@@ -131,19 +135,62 @@ final class GuardarrFilterObserver: ObservableObject, MediaPlayerObserver {
             return
         }
 
-        fetchTask = Task { [weak self] in
-            let result: FilterFetchResult
-            do {
-                let (data, response) = try await URLSession.shared.data(for: request)
-                let status = (response as? HTTPURLResponse)?.statusCode ?? 0
-                result = FilterFetchResult.from(status: status, body: data, requestedSizeBytes: size, requestedItemID: itemID)
-            } catch {
-                result = .failed(error.localizedDescription)
-            }
-            guard !Task.isCancelled, let self else { return }
+        let scanRequest = FilterRequest.scan(server: server, itemID: itemID, apiKey: apiKey)
 
-            self.apply(FilterGate.decide(result, enabledCategories: categories, allowUnfilteredTitles: allowUnfiltered))
+        // Fetch; if the title has no current list, ask for a scan once; then check
+        // back while that scan is queued or running, so playback starts as soon as
+        // the list is published.
+        fetchTask = Task { [weak self] in
+            var hasRequestedScan = false
+            var wasWaiting = false
+            while !Task.isCancelled {
+                var result = await Self.fetchList(request, sizeBytes: size, itemID: itemID)
+                if !hasRequestedScan, FilterGate.shouldRequestScan(result), let scanRequest {
+                    hasRequestedScan = true
+                    // A failed request keeps whatever status the server last reported.
+                    if let scan = await Self.requestScan(scanRequest) {
+                        result = result.withScan(scan)
+                    }
+                }
+                guard !Task.isCancelled, self != nil else { return }
+
+                let gate = FilterGate.decide(result, enabledCategories: categories, allowUnfilteredTitles: allowUnfiltered)
+                self?.apply(gate)
+
+                // Keep checking while a scan is under way, and through a passing
+                // network failure while one was, so a blip doesn't strand the viewer.
+                let isWaiting = FilterGate.isWaitingForScan(result)
+                let isTransientFailure: Bool = if case .failed = result {
+                    wasWaiting
+                } else {
+                    false
+                }
+                guard isWaiting || isTransientFailure else { return }
+
+                wasWaiting = wasWaiting || isWaiting
+                try? await Task.sleep(for: Self.scanPollInterval)
+            }
         }
+    }
+
+    private nonisolated static func fetchList(_ request: URLRequest, sizeBytes: Int64, itemID: String) async -> FilterFetchResult {
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+            return FilterFetchResult.from(status: status, body: data, requestedSizeBytes: sizeBytes, requestedItemID: itemID)
+        } catch {
+            return .failed(error.localizedDescription)
+        }
+    }
+
+    /// Asks the server to scan the title. `nil` when the request didn't go through,
+    /// in which case the viewer just sees that the title isn't filtered yet.
+    private nonisolated static func requestScan(_ request: URLRequest) async -> ScanStatus? {
+        guard let (data, response) = try? await URLSession.shared.data(for: request),
+              (response as? HTTPURLResponse)?.statusCode == 202
+        else { return nil }
+
+        return FilterFetchResult.scan(in: data)
     }
 
     private func apply(_ gate: FilterGate) {
@@ -152,9 +199,15 @@ final class GuardarrFilterObserver: ObservableObject, MediaPlayerObserver {
             controller = FilterController(timeline: timeline)
             status = .active
             manager?.logger.info("Guardarr filter active", metadata: ["ranges": .stringConvertible(timeline.muteRanges.count)])
+            // An unfiltered title stops the ticker; a list published mid-playback needs it back.
+            if ticker == nil {
+                startTicker()
+            }
+            resumeIfPausedForFilter()
 
         case .allowUnfiltered:
             status = .unfiltered
+            resumeIfPausedForFilter()
 
         case let .block(reason):
             block(reason)
@@ -162,8 +215,21 @@ final class GuardarrFilterObserver: ObservableObject, MediaPlayerObserver {
         tick()
     }
 
+    private func resumeIfPausedForFilter() {
+        guard pausedForFilter else { return }
+
+        pausedForFilter = false
+        manager?.proxy?.play()
+    }
+
     private func block(_ reason: FilterBlockReason) {
         status = .blocked(reason.message)
+        // An unfiltered title stops the ticker. A block that arrives later (a list
+        // missing a category, a lost server) must hold playback paused and muted
+        // on every tick again.
+        if ticker == nil {
+            startTicker()
+        }
         manager?.logger.warning("Guardarr filter blocked playback", metadata: ["reason": .string(reason.message)])
         tick()
     }
@@ -200,6 +266,7 @@ final class GuardarrFilterObserver: ObservableObject, MediaPlayerObserver {
             output(player, muted: true, blackedOut: true)
             if player.filterIsPlaying {
                 manager.proxy?.pause()
+                pausedForFilter = true
             }
 
         case .unfiltered:

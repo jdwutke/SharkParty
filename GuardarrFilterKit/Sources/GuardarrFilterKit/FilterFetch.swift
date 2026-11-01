@@ -47,8 +47,8 @@ public enum FilterRequest {
 public enum FilterFetchResult: Sendable, Equatable {
 
     case filtered(FilterList)
-    case notFiltered
-    case fileChanged
+    case notFiltered(ScanStatus?)
+    case fileChanged(ScanStatus?)
     case unauthorized
     case failed(String)
 
@@ -77,7 +77,7 @@ public enum FilterFetchResult: Sendable, Equatable {
             if let requestedItemID, normalized(list.itemID) != normalized(requestedItemID) {
                 return .failed("The filter server sent the list for a different title.")
             }
-            guard list.fileSizeBytes == requestedSizeBytes else { return .fileChanged }
+            guard list.fileSizeBytes == requestedSizeBytes else { return .fileChanged(nil) }
 
             return .filtered(list)
 
@@ -87,10 +87,10 @@ public enum FilterFetchResult: Sendable, Equatable {
         // A bare 404 or 409, from a wrong address or a proxy, must not read as
         // "this title has no filter list". Only the filter service's own answer counts.
         case 404 where serviceStatus(in: body) == "not_filtered":
-            return .notFiltered
+            return .notFiltered(scan(in: body))
 
         case 409 where serviceStatus(in: body) == "file_changed":
-            return .fileChanged
+            return .fileChanged(scan(in: body))
 
         default:
             return .failed("The filter server answered with HTTP \(status).")
@@ -103,6 +103,27 @@ public enum FilterFetchResult: Sendable, Equatable {
 
     private struct ServiceStatus: Decodable {
         let status: String
+    }
+
+    /// The same outcome with a newer scan status, after asking the server for a scan.
+    public func withScan(_ scan: ScanStatus?) -> FilterFetchResult {
+        switch self {
+        case .notFiltered:
+            .notFiltered(scan)
+        case .fileChanged:
+            .fileChanged(scan)
+        default:
+            self
+        }
+    }
+
+    private struct ScanEnvelope: Decodable {
+        let scan: ScanStatus?
+    }
+
+    /// The scan status in a 404, 409 or scan-request reply.
+    public static func scan(in body: Data) -> ScanStatus? {
+        (try? JSONDecoder().decode(ScanEnvelope.self, from: body))?.scan
     }
 
     private static func serviceStatus(in body: Data) -> String? {

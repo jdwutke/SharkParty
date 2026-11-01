@@ -422,9 +422,11 @@ extension Defaults.Keys {
             UserKey("guardarrAllowUnfilteredTitles", default: false)
         }
 
-        /// Raw `FilterCategory` values the viewer filters.
+        /// Raw `FilterCategory` values the viewer filters. Defaults to what the scan
+        /// engine checks today; turning on a category it doesn't scan blocks playback
+        /// until it does.
         static var enabledCategories: Key<[String]> {
-            UserKey("guardarrEnabledCategories", default: ["language", "nudity", "sexual", "violence", "gore", "other"])
+            UserKey("guardarrEnabledCategories", default: ["language", "nudity"])
         }
     }
 

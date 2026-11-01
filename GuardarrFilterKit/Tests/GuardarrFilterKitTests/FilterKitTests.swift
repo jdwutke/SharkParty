@@ -26,6 +26,7 @@ private func json(_ string: String) -> Data {
 private let listBody = json("""
 {"schema":1,"itemId":"0123456789abcdef0123456789abcdef","revision":2,"updatedAt":"2026-11-01T00:00:00Z",
  "file":{"path":"/m/x.mkv","sizeBytes":1000,"durationMs":6000000},
+ "coverage":["language","nudity","future-thing"],
  "events":[{"action":"mute","category":"language","startMs":1000,"endMs":1400,"label":"f-word"},
            {"action":"zoom","category":"drugs","startMs":5000,"endMs":6000,"label":null}]}
 """)
@@ -75,13 +76,13 @@ struct FetchResultTests {
 
     @Test
     func `200 for a different file size is treated as a changed file`() {
-        #expect(FilterFetchResult.from(status: 200, body: listBody, requestedSizeBytes: 999) == .fileChanged)
+        #expect(FilterFetchResult.from(status: 200, body: listBody, requestedSizeBytes: 999) == .fileChanged(nil))
     }
 
     @Test
     func `only the service's own 404 and 409 answers are trusted`() {
-        #expect(FilterFetchResult.from(status: 404, body: json(#"{"status":"not_filtered"}"#), requestedSizeBytes: 1) == .notFiltered)
-        #expect(FilterFetchResult.from(status: 409, body: json(#"{"status":"file_changed"}"#), requestedSizeBytes: 1) == .fileChanged)
+        #expect(FilterFetchResult.from(status: 404, body: json(#"{"status":"not_filtered"}"#), requestedSizeBytes: 1) == .notFiltered(nil))
+        #expect(FilterFetchResult.from(status: 409, body: json(#"{"status":"file_changed"}"#), requestedSizeBytes: 1) == .fileChanged(nil))
         if case .failed = FilterFetchResult.from(status: 404, body: json("<html>Not Found</html>"), requestedSizeBytes: 1) {} else {
             Issue.record("a bare 404 must not mean 'not filtered'")
         }
@@ -145,21 +146,30 @@ struct RequestTests {
 
 struct GateTests {
 
-    private let list = FilterList(schema: 1, itemID: "a", revision: 1, fileSizeBytes: 1, events: [event(.mute, 0, 10)])
+    private let list = FilterList(
+        schema: 1,
+        itemID: "a",
+        revision: 1,
+        fileSizeBytes: 1,
+        events: [event(.mute, 0, 10)],
+        coverage: Set(FilterCategory.allCases)
+    )
 
     @Test
     func `only a matching list lets filtered playback start`() {
         #expect(FilterGate.decide(.filtered(list), enabledCategories: allCategories, allowUnfilteredTitles: false)
             == .apply(FilterTimeline(events: list.events, enabledCategories: allCategories)))
-        #expect(FilterGate.decide(.notFiltered, enabledCategories: allCategories, allowUnfilteredTitles: false) == .block(.notFiltered))
-        #expect(FilterGate.decide(.fileChanged, enabledCategories: allCategories, allowUnfilteredTitles: true) == .block(.fileChanged))
+        #expect(FilterGate
+            .decide(.notFiltered(nil), enabledCategories: allCategories, allowUnfilteredTitles: false) == .block(.notFiltered(nil)))
+        #expect(FilterGate
+            .decide(.fileChanged(nil), enabledCategories: allCategories, allowUnfilteredTitles: true) == .block(.fileChanged(nil)))
         #expect(FilterGate.decide(.unauthorized, enabledCategories: allCategories, allowUnfilteredTitles: true) == .block(.unauthorized))
         #expect(FilterGate.decide(.failed("x"), enabledCategories: allCategories, allowUnfilteredTitles: true) == .block(.failed("x")))
     }
 
     @Test
     func `allowing unfiltered titles only covers titles without a list`() {
-        #expect(FilterGate.decide(.notFiltered, enabledCategories: allCategories, allowUnfilteredTitles: true) == .allowUnfiltered)
+        #expect(FilterGate.decide(.notFiltered(nil), enabledCategories: allCategories, allowUnfilteredTitles: true) == .allowUnfiltered)
     }
 }
 
@@ -368,5 +378,114 @@ struct ClockTests {
         #expect(clock.estimate(at: 100.25) == 10500)
         clock.record(positionMs: 10000, at: 100, rate: 1, isPlaying: false)
         #expect(clock.estimate(at: 104) == 10000)
+    }
+}
+
+struct CoverageAndScanTests {
+
+    private func list(coverage: Set<FilterCategory>) -> FilterList {
+        FilterList(schema: 1, itemID: "a", revision: 1, fileSizeBytes: 1, events: [], coverage: coverage)
+    }
+
+    @Test
+    func `coverage decodes and drops unknown categories`() {
+        guard case let .filtered(decoded) = FilterFetchResult.from(status: 200, body: listBody, requestedSizeBytes: 1000) else {
+            Issue.record("expected a list")
+            return
+        }
+
+        #expect(decoded.coverage == [.language, .nudity])
+    }
+
+    @Test
+    func `a list without coverage vouches for nothing`() {
+        let body = json(#"{"schema":1,"itemId":"a","revision":1,"file":{"sizeBytes":1},"events":[]}"#)
+        guard case let .filtered(decoded) = FilterFetchResult.from(status: 200, body: body, requestedSizeBytes: 1) else {
+            Issue.record("expected a list")
+            return
+        }
+
+        #expect(decoded.coverage.isEmpty)
+        #expect(FilterGate.decide(.filtered(decoded), enabledCategories: [.language], allowUnfilteredTitles: true)
+            == .block(.notFullyScanned([.language])))
+    }
+
+    @Test
+    func `a category the viewer filters but the file wasn't scanned for blocks`() {
+        let result = FilterFetchResult.filtered(list(coverage: [.language]))
+        #expect(FilterGate.decide(result, enabledCategories: [.language, .nudity], allowUnfilteredTitles: true)
+            == .block(.notFullyScanned([.nudity])))
+        if case .apply = FilterGate.decide(result, enabledCategories: [.language], allowUnfilteredTitles: false) {} else {
+            Issue.record("a fully covered list must apply")
+        }
+    }
+
+    @Test
+    func `other never needs coverage`() {
+        let result = FilterFetchResult.filtered(list(coverage: [.language]))
+        if case .apply = FilterGate.decide(result, enabledCategories: [.language, .other], allowUnfilteredTitles: false) {} else {
+            Issue.record("other is always filtered but never scanned for, so it must not block")
+        }
+    }
+
+    @Test
+    func `scan status rides along on 404 and 409`() {
+        let notFiltered = json(#"{"status":"not_filtered","scan":{"state":"running","stage":"transcript","attempts":1,"error":null}}"#)
+        #expect(FilterFetchResult.from(status: 404, body: notFiltered, requestedSizeBytes: 1)
+            == .notFiltered(ScanStatus(state: .running, stage: "transcript")))
+        let changed = json(#"{"status":"file_changed","scan":{"state":"weird"}}"#)
+        #expect(FilterFetchResult.from(status: 409, body: changed, requestedSizeBytes: 1) == .fileChanged(ScanStatus(state: .unknown)))
+        let noScan = json(#"{"status":"not_filtered","scan":null}"#)
+        #expect(FilterFetchResult.from(status: 404, body: noScan, requestedSizeBytes: 1) == .notFiltered(nil))
+    }
+
+    @Test
+    func `a scan is requested only when none is waiting or running`() {
+        #expect(FilterGate.shouldRequestScan(.notFiltered(nil)))
+        #expect(FilterGate.shouldRequestScan(.fileChanged(nil)))
+        #expect(FilterGate.shouldRequestScan(.notFiltered(ScanStatus(state: .failed))))
+        #expect(FilterGate.shouldRequestScan(.notFiltered(ScanStatus(state: .done))))
+        #expect(!FilterGate.shouldRequestScan(.notFiltered(ScanStatus(state: .queued))))
+        #expect(!FilterGate.shouldRequestScan(.fileChanged(ScanStatus(state: .running))))
+        #expect(!FilterGate.shouldRequestScan(.unauthorized))
+        #expect(!FilterGate.shouldRequestScan(.failed("x")))
+    }
+
+    @Test
+    func `the player keeps waiting only while a scan is active`() {
+        #expect(FilterGate.isWaitingForScan(.notFiltered(ScanStatus(state: .queued))))
+        #expect(FilterGate.isWaitingForScan(.fileChanged(ScanStatus(state: .running))))
+        #expect(!FilterGate.isWaitingForScan(.notFiltered(ScanStatus(state: .failed))))
+        #expect(FilterGate.isWaitingForScan(.notFiltered(ScanStatus(state: .done))), "a just-finished scan's list is fetched")
+        #expect(!FilterGate.isWaitingForScan(.notFiltered(nil)))
+    }
+
+    @Test
+    func `scan request is a keyed POST and refuses a bad id`() throws {
+        let server = try #require(URL(string: "http://h:1"))
+        let request = try #require(FilterRequest.scan(server: server, itemID: "0123456789abcdef0123456789abcdef", apiKey: "k"))
+        #expect(request.httpMethod == "POST")
+        #expect(request.url?.path == "/api/v1/items/0123456789abcdef0123456789abcdef/scan")
+        #expect(request.value(forHTTPHeaderField: "X-Api-Key") == "k")
+        #expect(FilterRequest.scan(server: server, itemID: "../x", apiKey: "k") == nil)
+    }
+
+    @Test
+    func `progress text names the stage`() {
+        #expect(ScanStatus(state: .running, stage: "transcript").progressText.contains("Listening for language"))
+        #expect(ScanStatus(state: .failed, error: "no audio").progressText.contains("no audio"))
+        #expect(FilterBlockReason.notFiltered(ScanStatus(state: .queued)).message == "Waiting to be filtered.")
+        #expect(FilterBlockReason.notFullyScanned([.nudity, .gore]).message.contains("gore or nudity"))
+    }
+
+    @Test
+    func `a scan request reply updates the waiting result`() {
+        let reply = json(#"{"itemId":"a","scan":{"state":"queued","stage":null,"attempts":0,"error":null}}"#)
+        let scan = FilterFetchResult.scan(in: reply)
+        #expect(scan == ScanStatus(state: .queued))
+        let updated = FilterFetchResult.notFiltered(nil).withScan(scan)
+        #expect(FilterGate.isWaitingForScan(updated))
+        #expect(!FilterGate.shouldRequestScan(updated))
+        #expect(FilterFetchResult.unauthorized.withScan(scan) == .unauthorized)
     }
 }
